@@ -2,9 +2,7 @@
 
 ## Pi r^2
 
-``` tex
-\pi
-```
+$\pir^2$$
 
 
 WIP. Under active development. Broken. Not ready for use.
