@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0",]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrsqrd"
+version = "0.0.0"
+authors = [
+  { name="Ben Howell", email="ben@psychstudio.com" },
+]
+description = "Reactive structured queryable relational data"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
