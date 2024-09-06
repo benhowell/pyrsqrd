@@ -7,134 +7,10 @@ from collections.abc import Mapping, Sequence
 from functools import reduce
 import ast
 
-ColumnDefinition: TypeAlias = Sequence[str, type, bool | None]
-Record: TypeAlias = list[Any]
-RecordSet: TypeAlias = list[Record]
-WhereConstraint: TypeAlias = tuple[Callable,str,Any]
-OrderByConstraint: TypeAlias = tuple[str,str]
+from structure import ColumnDefinition, WhereConstraint, OrderByConstraint
+from structure import serial, _Map, Column, Table, RecordSet
 
 NULL = True
-
-
-class serial:
-    id = 0
-    def __new__(cls):
-        serial.id += 1
-        obj = object().__new__(cls)
-        obj.__dict__['val'] = serial.id
-        return serial.id
-
-    def __repr__(self):
-        return 'serial(%s)' % (self.id)
-
-    def __str__(self):
-        print("yo")
-        #return '%s' % (self.id)
-        return 'serial'
-
-class _ImmutableMap(Mapping):
-    def __init__(self, *args, **kwargs):
-        self.__dict__ = dict(*args, **kwargs)
-    def __getitem__(self, key):
-        return self.__dict__[key]
-    def __len__(self):
-        return len(self.__dict__)
-    def __iter__(self):
-        return iter(self.__dict__)
-
-
-class _Map:
-    def __init__(self, *args, **kwargs):
-        self.map = _ImmutableMap(*args, **kwargs)
-
-    #def __str__(self):
-    #   return str(self.map.__dict__)
-
-    def __repr__(self):
-         return '_Map({})'.format(self.map.__dict__)
-
-    def __len__(self):
-        return len(self.map.keys())
-
-    def __iter__(self):
-        yield from self.map.values()
-
-    def __contains__(self, key):
-        return self.map.__contains__(key)
-
-    def keys(self):
-        return self.map.keys()
-
-    def values(self):
-        return self.map.values()
-
-    def get(self, key=None):
-        if key:
-            return self.map.get(key)
-        return list(self.map.values())
-
-    def set(self, pv: tuple[str], x: Any):
-        new = self.copy()
-        reduce(lambda x,y: x.get(y),pv, new.map).values = x
-        return new
-
-    def copy(self):
-        return _Map(self.__dict__['map'])
-
-    def add(self, x):
-        new = self.copy()
-        new.map.__dict__[x.name] = x
-        return new
-
-    def remove(self, x):
-        new = self.copy()
-        del new.map.__dict__[x]
-        return new
-
-
-
-@dataclass(slots=True)
-class Column:
-    """Database-like column."""
-    name: str
-    vtype: type
-    nullable: bool
-    values: tuple[Any] = tuple()
-
-    def get(self, slot):
-        return getattr(self, slot)
-
-    def __len__(self): # row count
-        return len(self.values)
-
-    def __iter__(self):
-        yield from self.values
-
-
-@dataclass(slots=True)
-class Table:
-    """Database-like table."""
-    name: str
-    columns: _Map = _Map()
-    comment: str = None
-
-    def get(self, slot):
-        return getattr(self, slot)
-
-    def column_count(self):
-        return len(self.columns.keys())
-
-    def __len__(self): # row count
-        return len(self.columns.get()[0])
-
-    #def __str__(self):
-    #    return str(self.columns)
-
-    def __repr__(self):
-        return 'Table(name={}, columns={})'.format(self.name,self.columns)
-
-    def __iter__(self):
-        yield from self.columns.values()
 
 
 
@@ -147,52 +23,80 @@ class Table:
 #row_border_ascii = '  +' + col_line_ascii('+') + '+'
 
 
-def print_table(t: Table, header: bool = True, row_borders=True,
-                format: str = 'unicode', default_missing: str = '(none)'):
-
+def print_recordset(rs: RecordSet,
+                    column_labels: bool=True,
+                    metadata: bool=True,
+                    row_borders: bool=False,
+                    format: str='unicode',
+                    default_missing: str='(none)'):
     pad = 4
-    ncols = len(t[0])
-    max = [0 for i in range(len(t[0]))]
-    for r in t:
+
+    # determine widest value in each column...
+    max = [len(x) for x in rs.columns]
+    for r in rs.rows:
         for i, v in enumerate(r):
+            if v is None:
+                v = default_missing
             if len(str(v)) > max[i]:
                 max[i] = len(str(v))
 
     if format == 'ascii':
-        h='—'   # horizontal # '-' # '~' # '='
-        v='|'   # vertical   # '|'
-        tc='.' # top corners
-        bc="'" # bottom corners
-        m='  '  # margin
-
-        row_format = m + v + '{0:<' + str(max[0]+pad) + '}' + v + ''.join(
-            '{' + str(i) + ':<' + str(max[i]+pad) +'}' + v for i in range(1, ncols))
-        col_line = lambda h,v: v.join(h * (m+pad) for m in max)
-        top_border = m + tc + col_line(h,h) + tc
-        row_border = m + v + col_line(h,v) + v
-        bottom_border = m + bc + col_line(h,h) + bc
+        h='—'               # horizontal # '-' # '~' # '='
+        v=['|','+','+','—'] # verticals
+        r=['|','|']         # row ends
+        c=['.','.',"'","'"] # corners
+        m='  '              # margin
 
     else: # format == 'unicode':
-        row_format = '  │{0:<' + str(max[0]+pad) + '}│' + ''.join(
-            '{' + str(i) + ':<' + str(max[i]+pad) + '}│' for i in range(1, ncols))
-        col_line = lambda c: c.join('─' * (m+pad) for m in max)
-        top_border = '  ┌' + col_line('┬') + '┐'
-        row_border = '  ├' + col_line('┼') + '┤'
-        bottom_border = '  └' + col_line('┴') + '┘'
+        h='─'               # horizontal
+        v=['│','┬','┼','┴'] # verticals
+        r=['├','┤']         # row ends
+        c=['┌','┐','└','┘'] # corners
+        m='  '              # margin
 
-    print(top_border)
-    if header:
-        print(row_format.format(pad=pad,max=max, *t[0]))
+    col_line = lambda h,v: v.join(h * (m+pad) for m in max)
+    top_border = m + c[0] + col_line(h,h) + c[1]
+    top_border_cols = m + c[0] + col_line(h,v[1]) + c[1]
+
+    bottom_border = m + c[2] + col_line(h,v[3]) + c[3]
+    col_top_border = m + r[0] + col_line(h,v[1]) + r[1]
+    row_border = m + r[0] + col_line(h,v[2]) + r[1]
+
+    meta_fmt = m + v[0] + '{0:<' + str(
+        sum((max[i]+pad+1) for i in range(
+            1, len(rs.columns))) + (max[0]+pad)) + '}' + v[0]
+
+    row_format = m + v[0] + '{0:<' + str(
+        max[0]+pad) + '}' + v[0] + ''.join('{' + str(i) + ':<' + str(
+            max[i]+pad) + '}' + v[0] for i in range(1, len(rs.columns)))
+
+    rb = False
+    if not metadata and not column_labels:
+        rb = True
+    elif metadata:
+        print(top_border)
+        print(meta_fmt.format(
+            pad=pad,max=max, *[rs.name + ', rows: ' + str(len(rs.rows))]))
+        print(col_top_border)
+
+    if column_labels:
+        if not metadata:
+            print(top_border_cols)
+        print(row_format.format(pad=pad,max=max, *rs.columns))
         if not row_borders:
             print(row_border)
-        t = t[1:]
-    for r in t:
-        if row_borders:
+
+    for r in rs.rows:
+        if rb:
+            rb = False
+            print(top_border_cols)
+        elif row_borders:
             print(row_border)
         print(row_format.format(
             *mapv(r, lambda v: str(v) if v is not None else default_missing),
             pad=pad,max=max))
     print(bottom_border)
+
 
 
 def dict_mapv(v,f,*a):
@@ -211,7 +115,7 @@ def filteriv(v,f,r='v',*a):
 def equal(x: str, y: Any) -> WhereConstraint:
     return eq,x,y
 
-debug = True
+debug = False
 
 class Pyrsqrd:
 
@@ -262,21 +166,24 @@ class Pyrsqrd:
         return list(self.__tables.get())
 
 
-    def table_metadata(self) -> tuple[RecordSet]:
+    # tcb = "tables", "columns", or "both"
+    def table_metadata(self, tcb: str ='both') -> tuple[RecordSet,RecordSet]:
         tables = self.__tables.get()
-        th = ['Table name', 'Column count', 'Row count', 'Comment']
+
         tt = mapv(tables, lambda t: [t.name, t.column_count(),
             len(t), t.comment])
-        tt.insert(0,th)
 
-        ch = ['Table name','Column name', 'Data type',
-            'Nullable', 'Auto increment']
+        trs = RecordSet('Table metadata',
+            ['Table name', 'Column count', 'Row count', 'Comment'], tt)
+
         ct = reduce(add,mapv(tables, lambda t: mapv(t,
             lambda c: [t.name, c.name, str(c.vtype),
                        c.nullable, c.vtype == serial])))
-        ct.insert(0,ch)
+        crs = RecordSet('Column metadata',
+            ['Table name','Column name', 'Data type',
+            'Nullable', 'Auto increment'], ct)
 
-        return tt,ct
+        return trs,crs
 
 
     def columns(self, table: str, column: str = None) -> Column | list[Column]:
@@ -340,7 +247,7 @@ class Pyrsqrd:
             else:
                 nval = cvm.get(column.name, None)
                 if nval is not None:
-                    if type(nval) != column.vtype:
+                    if isinstance(nval,str) and type(nval) != column.vtype:
                         nval = ast.literal_eval(nval)
                     if nval is not None:
                         self.add_value(table, column.name, column.values + (nval,))
@@ -361,36 +268,43 @@ class Pyrsqrd:
                table: str,
                columns: Sequence[str] | None = None,
                where: Sequence[WhereConstraint] | None = None,
-               order_by: Sequence[OrderByConstraint] | None = None):
+               order_by: Sequence[OrderByConstraint] | None = None) -> RecordSet:
 
-        # get full table for cases where the
-        # where condition column(s) are not in select columns
+        """
+        Database-like SELECT statement function
+        """
+
+        # start with all columns because where condition
+        # column(s) may not be in select columns
         cs = self.columns(table)
+
+        # construct records...
         ks = mapv(cs, lambda c: c.name)
         vs = list(map(list, zip(*cs)))
 
         # filter by where conditions...
-        # if where:
-        #     for i,w in enumerate(where):
-        #         print("iw:",i,w)
-        #         idx = ks.index(w[1])
-        #         vs = [print(t[1]) for t in enumerate(vs)]
-        #         vs = filteriv(vs, lambda v: w[0](v[1], w[2]),'v')
+        if where:
+            for i,w in enumerate(where):
+                idx = ks.index(w[1])
+                vs = filterv(vs, lambda v: w[0](v[idx], w[2]))
 
-        print("ks:",ks)
-        #print("cs",[print(x.name) for x in cs])
-        # filter select columns...
+        # filter by select columns...
         if type(columns) == str:
             columns = [columns]
 
         if columns and '*' in columns:
              if len(columns) > 1:
-                cs = cs + filterv(cs, lambda c: c.name in columns)
-                print("cs",cs)
+                nks = filterv(ks, lambda k: k in columns)
+                ks = ks + nks
+                uvs = list(zip(*vs))
+                vs = list(map(list,zip(
+                    *uvs + mapv(nks, lambda k: uvs[ks.index(k)]))))
         elif columns:
-            cs = filterv(cs, lambda c: c.name in columns)
+            nks = filterv(ks, lambda k: k in columns)
+            uvs = list(zip(*vs))
+            vs = list(map(list,zip(*mapv(nks, lambda k: uvs[ks.index(k)]))))
+            ks = nks
         #else: # all columns
-
 
         # if debug:
         #     _c = ', '.join(columns)
@@ -398,17 +312,18 @@ class Pyrsqrd:
         #     _o = "ORDER BY " +' '.join(order_by) if order_by else None
         #     print("SELECT {} FROM {}{} {}".format(_c,table,_w,_o))
 
-
-FIXME: this is meant to be a vector of order bys
+        # order by conditions...
         if order_by:
-            if len(order_by) < 2:
-                d = False # reverse=False == 'ASC'
+            for o in order_by:
+                if len(order_by) < 2:
+                    d = False # reverse=False == 'ASC'
             else:
-                d = order_by[1] == 'DESC'
-            idx = ks.index(order_by[0])
+                d = o[1] == 'DESC'
+            idx = ks.index(o[0])
             vs.sort(key=itemgetter(idx), reverse=d)
-        vs.insert(0, ks)
-        return vs
+
+        #vs.insert(0, ks)
+        return RecordSet(table,ks,vs)
 
 
 
@@ -477,32 +392,31 @@ with open(customer_csv, "r") as file:
     reader = csv.reader(file, delimiter=',',lineterminator='\n')
     for r in reader:
         id = db.insert(table=table, columns=columns[0:len(r)], values=r)
-        print("insert id:",id)
 
 
-customers = db.select(
-    table = 'customer',
-    columns = ('*',),
-    order_by = ('last_name', 'ASC'))
-print_table(customers, row_borders=False)
+# customers = db.select(
+#     table = 'customer',
+#     columns = ['first_name', 'age'],
+#     order_by = [('last_name', 'ASC')])
+# print_recordset(customers)
 
 
 
 
 # or a column as string
 
-# customers = db.select(
-#     table = 'customer',
-#     columns = ('*','first_name', 'last_name','age'),
-#     order_by = ('last_name', 'DESC'))
+customers = db.select(
+    table = 'customer',
+    columns = ('*','first_name', 'last_name'),
+    order_by = [('last_name', 'DESC')])
 
-# print("")
-# print_table(customers, row_borders=False)
-# print("")
+print("")
+print_recordset(customers, row_borders=False)
+print("")
 
-# tmd, cmd = db.table_metadata()
-# print_table(tmd,row_borders=False)
-# print_table(cmd,row_borders=False)
+tmd, cmd = db.table_metadata()
+print_recordset(tmd,row_borders=False)
+print_recordset(cmd,row_borders=False)
 
 
 customers = db.select(
@@ -512,7 +426,12 @@ customers = db.select(
     order_by = [('last_name', 'DESC')]
     )
 
-print_table(customers, row_borders=False)
+print_recordset(customers, metadata=True,
+                row_borders=True,
+                column_labels=True, format='ascii')
+print_recordset(customers, metadata=True,
+                row_borders=True,
+                column_labels=True, format='unicode')
 
 
 
